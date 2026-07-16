@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>NetworkUsageMonitor</AssemblyName>
+    <RootNamespace>NetworkUsageMonitor</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>UI\app.ico</ApplicationIcon>
+
+    <!-- Single-file, self-contained publish -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- Diagnostics session requires elevation; declared again here for clarity -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Product>Network Usage Monitor</Product>
+    <Company>Local</Company>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.11" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The dashboard front-end ships as embedded resources so the published
+         .exe needs no external files at runtime. Resource logical names follow
+         RootNamespace + folder path, e.g. NetworkUsageMonitor.Dashboard.wwwroot.index.html -->
+    <EmbeddedResource Include="Dashboard\wwwroot\**\*" />
+    <EmbeddedResource Include="UI\app.ico" LogicalName="NetworkUsageMonitor.UI.app.ico" />
+  </ItemGroup>
+
+</Project>

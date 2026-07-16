@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Network Usage Monitor</title>
+<link rel="stylesheet" href="/css/dashboard.css" />
+</head>
+<body>
+<div class="app" id="app">
+
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-dot"></span>
+            <span>Network Usage Monitor</span>
+        </div>
+        <div class="topbar-controls">
+            <div class="segmented" id="metricSwitch">
+                <button data-value="bytes" class="active">Data</button>
+                <button data-value="percent">Percent</button>
+            </div>
+            <button class="icon-btn" id="themeToggle" title="Toggle theme">&#9788;</button>
+        </div>
+    </header>
+
+    <section class="toolbar">
+        <div class="segmented" id="rangeSwitch">
+            <button data-value="day" class="active">Day</button>
+            <button data-value="week">Week</button>
+            <button data-value="month">Month</button>
+            <button data-value="year">Year</button>
+            <button data-value="all">All-time</button>
+        </div>
+
+        <div class="segmented" id="adapterSwitch">
+            <button data-value="all" class="active">All Networks</button>
+        </div>
+
+        <label class="checkbox">
+            <input type="checkbox" id="sessionToggle" />
+            <span>Current session only</span>
+        </label>
+
+        <div class="spacer"></div>
+
+        <div class="export-menu">
+            <button class="btn" id="exportJson">Export JSON</button>
+            <button class="btn" id="exportCsv">Export CSV</button>
+        </div>
+    </section>
+
+    <main class="grid">
+
+        <section class="card timeline-card">
+            <div class="card-header">
+                <h2>Traffic over time</h2>
+                <button class="btn ghost" id="resetZoom">Reset zoom</button>
+            </div>
+            <div class="chart-controls">
+                <div class="segmented" id="chartModeSwitch">
+                    <button data-value="overlay" class="active">Overlay</button>
+                    <button data-value="download">Show Download Only</button>
+                    <button data-value="upload">Upload Only</button>
+                    <button data-value="combined">Two Combined</button>
+                </div>
+                <div class="chart-legend" id="chartLegend">
+                    <span class="legend-item"><span class="legend-swatch legend-download"></span>Download</span>
+                    <span class="legend-item"><span class="legend-swatch legend-upload"></span>Upload</span>
+                </div>
+            </div>
+            <canvas id="timelineCanvas"></canvas>
+        </section>
+
+        <section class="card apps-card">
+            <div class="card-header">
+                <h2>Applications</h2>
+                <div class="segmented" id="appsSortSwitch">
+                    <button data-value="total" class="active">Total</button>
+                    <button data-value="received">Download</button>
+                    <button data-value="sent">Upload</button>
+                    <button data-value="name">Name</button>
+                </div>
+                <!-- Кнопка тепер лежить ПОРУЧ із div, а не всередині нього -->
+                <button id="sort-order-btn" class="order-btn" title="Toggle Sort Order">↓</button>
+            </div>
+            <div id="appList" class="app-list"></div>
+        </section>
+
+        <section class="card heatmap-card">
+            <div class="card-header">
+                <h2>Weekly activity heatmap</h2>
+            </div>
+            <canvas id="heatmapCanvas"></canvas>
+        </section>
+
+    </main>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-heading">
+                <h3 id="modalTitle">Application</h3>
+                <button class="modal-path" id="modalPath" title="Open containing folder"></button>
+            </div>
+            <button class="icon-btn" id="modalClose">&times;</button>
+        </div>
+        <div class="modal-body">
+            <h4>Live connections</h4>
+            <table class="conn-table">
+                <thead>
+                    <tr><th>Protocol</th><th>Country</th><th>Remote address</th><th>Remote port</th><th>Local port</th></tr>
+                </thead>
+                <tbody id="connectionsBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script src="/js/dashboard.js"></script>
+</body>
+</html>
