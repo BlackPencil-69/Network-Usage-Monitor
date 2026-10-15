@@ -1,167 +1,118 @@
 # 📡 Network Usage Monitor
 
-A lightweight, self-contained Windows tray utility (C#, .NET 8, WPF) that shows **real-time per-application bandwidth usage**, tracks **traffic by country** with a fully **offline GeoIP database**, separates traffic by network type (home/office vs. mobile hotspot), enforces mobile data caps with toast notifications, and ships a **local, fully offline analytics dashboard**.
+[![.NET 8](https://img.shields.io/badge/.NET-8.0-512bd4.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
+[![C#](https://img.shields.io/badge/C%23-12-239120.svg)](https://learn.microsoft.com/dotnet/csharp/)
+[![WPF](https://img.shields.io/badge/UI-WPF-0078d4.svg)](https://learn.microsoft.com/dotnet/desktop/wpf/)
+[![Windows](https://img.shields.io/badge/Windows-10%20(19041+)%20%7C%2011-0078d4.svg)](https://www.microsoft.com/windows)
+[![x64](https://img.shields.io/badge/platform-win--x64-lightgrey.svg)](#-requirements)
+[![ETW](https://img.shields.io/badge/ETW-TraceEvent_3.1-blue.svg)](https://github.com/microsoft/perfview/tree/main/src/TraceEvent)
+[![SQLite](https://img.shields.io/badge/SQLite-WAL-003b57.svg)](https://www.sqlite.org/)
+[![Offline GeoIP](https://img.shields.io/badge/GeoIP-offline_(DB--IP)-green.svg)](https://github.com/sapics/ip-location-db)
+[![Gemini](https://img.shields.io/badge/Google_Gemini-AI_assisted-1a73e8.svg)](https://ai.google.dev/)
+[![Claude](https://img.shields.io/badge/Anthropic_Claude-AI_assisted-cc6633.svg)](https://docs.anthropic.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> 🤖 **Note:** This project was written with the assistance of Artificial Intelligence. Created to demonstrate modern AI-assisted development.
+
+A lightweight, self-contained Windows tray utility (C#, .NET 8, WPF) that shows **real-time per-application bandwidth**, tracks **traffic by country** with an **offline GeoIP database**, splits traffic by **network adapter** (Wi-Fi, Ethernet, …) and ships a **local analytics dashboard**.
 
 > Everything runs on your machine. No cloud, no accounts, no external API calls during packet analysis.
 
----
-
 ## 📌 Table of Contents
 
+- [Screenshots](#-screenshots)
 - [Features](#-features)
 - [Requirements](#-requirements)
-- [Quick Start (pre-built .exe)](#-quick-start-pre-built-exe)
-- [Run automatically at Windows startup (Task Scheduler)](#-run-automatically-at-windows-startup-task-scheduler)
-- [Build & run (development)](#-build--run-development)
-- [Publish a single, self-contained .exe](#-publish-a-single-self-contained-exe)
+- [Quick Start](#-quick-start)
+- [Autostart (Task Scheduler)](#-autostart-task-scheduler)
+- [Build & publish](#-build--publish)
 - [Dashboard API](#-dashboard-api)
 - [Architecture](#-architecture)
 - [How it works](#-how-it-works)
 - [Data storage](#-data-storage)
-- [Intentionally simplified](#-intentionally-simplified-and-how-to-extend-it)
+- [Limitations](#-limitations)
 - [Troubleshooting](#-troubleshooting)
+
+---
+
+## 🖼️ Screenshots
+
+**Dashboard**
+
+![Dashboard](src/docs/screenshots/dashboard.jpg)
+
+**Compare Months**
+
+![Compare Months](src/docs/screenshots/compare-months.jpg)
+
+**Tray flyout**
+
+<img src="src/docs/screenshots/flyout.jpg" alt="Tray flyout" width="420">
 
 ---
 
 ## ✨ Features
 
-### 🔵 Real-time monitoring (tray flyout)
+### 🔵 Tray flyout
 
-- **Per-process speeds** via kernel ETW events — grouped by application, with expandable child PIDs.
-- **Total speed badge** in the flyout header showing live system-wide download (↓) and upload (↑).
-- **Both directions per PID**: expanded child processes show download (↓) and upload (↑) speeds.
-- **Smart icon cache** (`ProcessIconCache`): high-quality system icons for `.exe` files, with colored initials as a fallback when the file is missing or inaccessible.
-- **DPI-aware positioning**: the flyout snaps to the bottom-right corner of the work area (next to the clock) using `MonitorFromRect` / `GetDpiForMonitor` — correct at 125%/150% scaling and on multi-monitor setups with different DPI.
-- **Dark custom scrollbar** and consistent row alignment (system services like `System` line up with all other apps).
-- **Sleep/Hibernate resilient**: the ETW session is restarted automatically after resume (`PowerModeChanged`).
-- **Deadlock-safe UI updates**: metrics are pushed from the background thread with asynchronous `BeginInvoke`.
+- **Per-process speeds** from kernel ETW events, grouped by application with expandable child PIDs (download ↓ and upload ↑ per PID).
+- **Total speed badge** with live system-wide ↓ / ↑.
+- **Icons**: real `.exe` icons, with colored initials as a fallback.
+- **DPI-aware positioning** next to the tray (`MonitorFromRect` / `GetDpiForMonitor`), correct on multi-monitor setups with mixed scaling.
+- **Resilient**: the ETW session restarts automatically after sleep/hibernate; UI updates are pushed asynchronously (`BeginInvoke`).
+- **Tray menu**: *Statistics* (opens the dashboard), *Open settings file*, *Exit program*.
+- **Single instance** (named mutex); unhandled errors are written to `error.log`.
 
 ### 🌍 Offline GeoIP & Traffic by Country
 
-- **100% local country resolution** (`GeoIpResolver`): public IPv4 and IPv4-mapped IPv6 addresses are resolved to two-letter ISO country codes (`ua`, `us`, `de`, …) with **no HTTP requests** during packet analysis.
-- **Zero-allocation lookups** in the hot ETW path: IP ranges are stored in aligned in-memory arrays and searched with `Array.BinarySearch` — no GC pressure.
-- **Background database download/refresh**: `geoip-ipv4.csv` is fetched on a background thread with exponential retry delays and integrity validation before the file is replaced.
-- **Service-traffic filtering**: private, loopback and multicast addresses go into a separate `local` category so they don't pollute external traffic statistics.
-- **Traffic by Country card** on the dashboard:
-  - **Top List** — flags (flagcdn.com), localized country names, relative-volume bars, separate Upload/Download metrics and active connection counts.
-  - **World Map** — Canvas bubble map with color-coded intensity and country-code labels.
-  - **Global country filter** — click any country (list or map) to switch the whole dashboard (charts, KPIs, app list) to that region only. A badge lets you reset the filter in one click.
+- **Local country resolution** (`GeoIpResolver`): public IPv4 and IPv4-mapped IPv6 addresses → ISO country code, no HTTP requests during analysis.
+- **Allocation-free lookups** in the hot ETW path via `Array.BinarySearch` over in-memory ranges.
+- **Special codes**: `local` for private/loopback/multicast/link-local addresses, `unk` for addresses that can't be resolved.
+- **Traffic by Country card**: Top List (flags, bars, upload/download, connection counts) and a Canvas World Map. Clicking a country filters the **whole dashboard** (charts, KPIs, apps); a badge resets it.
 
-### 📊 Web dashboard & statistics
+### 📊 Web dashboard
 
-- **Flexible time ranges**
-  - Rolling: **24 Hours**, **7 Days**, **30 Days**, **Year** (365 days)
-  - Calendar: **Today** (from 00:00 local), **This Week** (from Monday 00:00), **This Month**, **This Year**
-  - **All-time** — the entire stored history
-  - **Month picker** — any month that has data in the DB (`/api/months`), boundaries computed in local time
-- **Zero-filling** of timelines: gaps (sleep, powered-off laptop) are filled with zeros and future time is trimmed, so there are no fake diagonal lines or artificial drops.
-- **Compare Months** (`/api/compare`): pick any two months and get
-  - KPI cards (Total, Download, Upload, daily average) with **±% delta badges** (`+X%` / `-X%` / `flat`),
-  - a comparison table of top applications with exact byte differences and trend.
-- **Interactive Canvas charts**
-  - Line modes: **Overlay** (Upload and Download separately), **Download only**, **Upload only**, **Two Combined** (sum).
-  - **Wheel zoom** centered on the cursor, **drag-to-zoom** rectangle selection, **double-click** to reset zoom.
-  - Floating **tooltip** with exact Upload, Download, total and formatted time, plus a **crosshair** line.
-  - **Weekly activity heatmap** — 7 days × 24 hours with automatic color normalization.
-- **KPI strip**: Total Traffic (Upload / Download split), Daily Average (over real active days), Peak Activity (date + exact volume), Top Country / Active Apps.
-- **Application list controls**: sort by Total, Download, Upload or Name, with a ↑ / ↓ direction toggle; switch between absolute bytes and percentage of total.
-- **Application Details modal**
-  - Process total, its share of overall system traffic, and its peak day.
-  - Personal mini-chart on Canvas.
-  - **Top countries** the process talked to.
-  - **Live Connections** via `GetExtendedTcpTable` / `GetExtendedUdpTable`: protocol (TCP/UDP), destination country, IP, remote and local ports.
-  - **Reveal in Explorer** (`explorer.exe /select,`) with safe argument passing.
-- **Export** raw traffic history for the selected period as **.json** or **.csv** (special characters correctly escaped).
-- **Light and dark themes**, saved automatically in `localStorage`.
+- **Ranges**: 24 Hours, Today, 7 Days, This Week, 30 Days, This Month, Year, This Year, All-time, or any **specific month** from a picker. Calendar ranges use local time.
+- **Filters**: network adapter (All Networks / Wi-Fi / Ethernet / …), country, and **Current session only**.
+- **Auto-refresh** every 15 s; timelines are **zero-filled** (gaps from sleep/power-off) and future time is trimmed.
+- **Compare Months**: KPI cards (Total, Download, Upload, daily average) with ±% delta badges and a top-10 application table with byte differences.
+- **Interactive charts** (dependency-free Canvas): Overlay / Download only / Upload only / Two Combined modes, wheel zoom, drag-to-zoom, double-click reset, tooltip with crosshair, and a 7×24 weekly heatmap.
+- **KPI strip**: Total Traffic (↑/↓ split), Daily Average, Peak Activity, Top Country / Active Apps.
+- **Applications list**: sort by Total / Download / Upload / Name with direction toggle; absolute bytes or percent.
+- **Application details modal**: total, share of all traffic, peak day, mini-chart, top countries, **live connections** (protocol, country, remote IP/port, local port) and *Reveal in Explorer*.
+- **Export** history for the selected range as `.json` or `.csv`.
+- **Light/dark theme**, remembered in `localStorage`.
 
-### 🗄️ Database (SQLite) optimization & maintenance
+### 🗄️ SQLite maintenance
 
-- **Hourly rollup**: detailed 15-second rows older than 48 hours are compacted into hourly buckets in `usage_samples` and `country_samples`. A multi-month history can shrink from hundreds of megabytes to ~20 MB with no loss of retrospective accuracy.
-- **Short-lived process aggregation**: junk processes that exit before their name can be resolved (`Pid-XXXX`) are merged into a single `Background / Short-lived` group instead of creating thousands of unique rows.
-- **Scheduled maintenance** every 6 hours via a background timer, plus an extra check on batch write in case the PC was asleep.
-- **Physical space reclamation**: `PRAGMA wal_checkpoint(TRUNCATE)` and `VACUUM` run automatically when more than 5000 rows were removed or aggregated.
-- **Reliability settings**: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000` — the web server can read while the writer is active without mutual locking.
-- **Automatic schema migration**: data from the old `country_usage` table is moved into `country_samples` and obsolete tables are dropped inside a single transaction.
-
-### 🔔 Other
-
-- Separates **Home/Office** vs. **Mobile Hotspot** traffic.
-- **80% / 100% data-cap toast alerts** for the mobile hotspot.
-- Single self-contained `.exe` — nothing needs to be installed on the target machine.
+- **Hourly rollup**: 15-second rows older than 48 h are compacted into hourly buckets (`usage_samples`, `country_samples`).
+- **Short-lived processes** that can't be resolved are grouped as `Background / Short-lived` instead of creating many `Pid-XXXX` rows (old rows are renamed during maintenance).
+- **Schedule**: every 6 hours, plus a check on batch writes in case the PC was asleep.
+- **Space reclaim**: `wal_checkpoint(TRUNCATE)` + `VACUUM` when more than 5000 rows were compacted/renamed.
+- **Settings**: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, so the dashboard can read while the writer is active.
+- **Migrations**: legacy `country_usage` → `country_samples`. ⚠️ A very old schema with `interface_category` (data-cap / app-category builds) can't be mapped to the adapter-based schema, so that `usage_samples` table is **dropped and rebuilt**.
 
 ---
 
 ## 🧰 Requirements
 
-- Windows 10 (build 19041+) or Windows 11, **x64**
-- **.NET 8 SDK** — only to build from source (the published app is self-contained)
-- **Administrator rights at runtime** — see [Why Administrator?](#why-administrator)
+- Windows 10 (19041+) or Windows 11, **x64**
+- **.NET 8 SDK** only to build from source (the published app is self-contained)
+- **Administrator rights** at runtime (kernel ETW sessions; see [How it works](#-how-it-works))
+
+## 🚀 Quick Start
+
+1. Download `NetworkUsageMonitor.exe` from [Releases](https://github.com/BlackPencil-69/NetworkUsageMonitor/releases) into a permanent folder, e.g. `C:\Tools\NetworkUsageMonitor\`.
+2. Run it and confirm the UAC prompt.
+3. Click the tray icon for the flyout; right-click it → **Statistics** for the dashboard (`http://127.0.0.1:58765/` by default).
 
 ---
 
-## 🚀 Quick Start (pre-built .exe)
+## 🔁 Autostart (Task Scheduler)
 
-1. Download `NetworkUsageMonitor.exe` from the [Releases](../../releases) page.
-2. Put it in a permanent folder, for example `C:\Tools\NetworkUsageMonitor\`.
-   (Don't run it from *Downloads* or a temp folder if you plan to enable autostart.)
-3. Double-click it and confirm the UAC prompt.
-4. Find the icon in the system tray (click `^` if it's hidden). Click it to open the flyout; use the tray menu to open the dashboard.
+The `Startup` folder and registry `Run` key start programs *without* elevation, so they either trigger UAC at every login or fail. A scheduled task with **highest privileges** starts the app silently.
 
----
-
-## 🔁 Run automatically at Windows startup (Task Scheduler)
-
-The app needs **Administrator rights** (kernel ETW sessions). Regular autostart methods — the `Startup` folder or the registry `Run` key — start programs *without* elevation, so Windows would either show a UAC prompt on every login or the app would fail to start. **Task Scheduler** can launch a program with the highest privileges *silently*, which is why it is the right tool here.
-
-### Option A — Using the Task Scheduler GUI
-
-1. Press **Win + R**, type `taskschd.msc`, press **Enter**.
-2. In the right-hand **Actions** panel click **Create Task…** (not *Create Basic Task* — it lacks the elevation checkbox).
-3. **General** tab:
-   - **Name:** `NetworkUsageMonitor`
-   - Select **Run only when user is logged on**.
-   - ✅ Check **Run with highest privileges**. *(This is the key setting — it skips the UAC prompt.)*
-   - **Configure for:** Windows 10 / Windows 11.
-4. **Triggers** tab → **New…**
-   - **Begin the task:** `At log on`
-   - **Specific user:** your account.
-   - ✅ **Delay task for:** `30 seconds` (lets the network stack and tray finish loading).
-   - ✅ **Enabled** → **OK**.
-5. **Actions** tab → **New…**
-   - **Action:** `Start a program`
-   - **Program/script:** browse to your exe, e.g. `C:\Tools\NetworkUsageMonitor\NetworkUsageMonitor.exe`
-   - **Start in (optional):** the exe's folder, e.g. `C:\Tools\NetworkUsageMonitor\` (without quotes)
-   - **OK**.
-6. **Conditions** tab:
-   - ❌ **Uncheck** *Start the task only if the computer is on AC power* (otherwise it won't start on battery).
-   - ❌ **Uncheck** *Stop if the computer switches to battery power*.
-7. **Settings** tab:
-   - ❌ **Uncheck** *Stop the task if it runs longer than* (the default 3 days would kill the monitor).
-   - ✅ *Allow task to be run on demand*.
-   - **If the task is already running:** `Do not start a new instance`.
-8. Click **OK** (enter your Windows password if asked).
-9. **Test it:** right-click the task in the list → **Run**. The tray icon should appear without any UAC prompt. Then sign out and back in (or reboot) to confirm autostart works.
-
-### Option B — One command (Command Prompt as Administrator)
-
-Open **Command Prompt as Administrator** and run (adjust the path):
-
-```bat
-schtasks /Create /TN "NetworkUsageMonitor" /TR "\"C:\Tools\NetworkUsageMonitor\NetworkUsageMonitor.exe\"" /SC ONLOGON /RL HIGHEST /DELAY 0000:30 /F
-```
-
-| Flag | Meaning |
-|------|---------|
-| `/TN` | Task name |
-| `/TR` | Program to run (note the escaped quotes — they are needed if the path contains spaces) |
-| `/SC ONLOGON` | Trigger: at user logon |
-| `/RL HIGHEST` | Run with highest privileges (no UAC prompt) |
-| `/DELAY 0000:30` | Wait 30 seconds after logon (`mmmm:ss`) |
-| `/F` | Overwrite the task if it already exists |
-
-> ⚠️ This command creates the task with default conditions, which on laptops includes *"start only on AC power"* and a 3-day execution limit. To fix both, use Option C or open the task in `taskschd.msc` and apply steps 6–7 above.
-
-### Option C — PowerShell (Administrator), with laptop-friendly settings
+### Option A — PowerShell (Administrator, laptop-friendly)
 
 ```powershell
 $exe     = "C:\Tools\NetworkUsageMonitor\NetworkUsageMonitor.exe"
@@ -178,164 +129,164 @@ Register-ScheduledTask -TaskName "NetworkUsageMonitor" `
     -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
 ```
 
-### Managing the task
+### Option B — One command (Administrator CMD)
 
 ```bat
-:: Run it now
+schtasks /Create /TN "NetworkUsageMonitor" /TR "\"C:\Tools\NetworkUsageMonitor\NetworkUsageMonitor.exe\"" /SC ONLOGON /RL HIGHEST /DELAY 0000:30 /F
+```
+
+> ⚠️ This uses default conditions: on laptops the task will *not* start on battery and is stopped after 3 days. Use Option A, or fix both in `taskschd.msc` (**Conditions** → uncheck the AC-power options; **Settings** → uncheck *Stop the task if it runs longer than*).
+
+### Option C — GUI (`taskschd.msc` → Create Task…)
+
+- **General**: ✅ *Run with highest privileges* (skips UAC), *Run only when user is logged on*.
+- **Triggers**: *At log on*, your user, ✅ *Delay task for 30 seconds*.
+- **Actions**: *Start a program* → path to the exe, *Start in* → its folder (no quotes).
+- **Conditions / Settings**: uncheck the AC-power options and the execution time limit; *If the task is already running* → `Do not start a new instance`.
+
+### Managing
+
+```bat
 schtasks /Run /TN "NetworkUsageMonitor"
-
-:: Stop it
 schtasks /End /TN "NetworkUsageMonitor"
-
-:: Disable autostart (keeps the task)
 schtasks /Change /TN "NetworkUsageMonitor" /DISABLE
-
-:: Remove autostart completely
 schtasks /Delete /TN "NetworkUsageMonitor" /F
 ```
 
-### Updating the app later
-
-If you replace the `.exe` **at the same path**, the task keeps working. If you move the exe, edit the task (**Actions** tab) or re-create it with the new path. Close the running instance from the tray first, otherwise the file will be locked.
-
-### Autostart troubleshooting
+Replacing the exe **at the same path** keeps the task working; close the running instance from the tray first (the file is locked).
 
 | Problem | Fix |
 |---------|-----|
-| Nothing starts at logon | Check the task's **History** tab (enable it via *Actions → Enable All Tasks History*). Verify the exe path in the **Actions** tab. |
-| UAC prompt appears every time | *Run with highest privileges* is not checked, or you used the Startup folder / registry instead of a scheduled task. |
-| Doesn't start on battery | Uncheck the AC-power conditions (step 6). |
-| Stops after a few days | Uncheck *Stop the task if it runs longer than…* (step 7). |
-| Starts twice | Set *If the task is already running* → `Do not start a new instance`. |
-| Tray icon missing after login | Increase the logon delay to 45–60 seconds. |
+| Nothing starts at logon | Check the task's **History** tab and the exe path. |
+| UAC prompt every time | *Run with highest privileges* is off, or a Startup folder/registry entry is used. |
+| Doesn't start on battery / stops after days | Uncheck the AC-power conditions and the time limit. |
+| Tray icon missing after login | Increase the logon delay to 45–60 s. |
 
 ---
 
-## 🛠️ Build & run (development)
+## 🛠️ Build & publish
 
-```
+```powershell
 cd src
 dotnet restore
-dotnet run
+dotnet run          # run the terminal as Administrator (app.manifest requires elevation)
+
+dotnet publish -c Release
 ```
 
-Visual Studio will also prompt for elevation automatically because of `app.manifest` (`requireAdministrator`). If you run from the terminal, start that terminal as Administrator.
-
-## 📦 Publish a single, self-contained .exe
-
-```
-cd src
-dotnet publish -c Release -r win-x64 --self-contained true ^
-    -p:PublishSingleFile=true ^
-    -p:IncludeNativeLibrariesForSelfExtract=true ^
-    -p:EnableCompressionInSingleFile=true
-```
-
-The result is `src\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\NetworkUsageMonitor.exe` — a single file with no external DLLs, config files, or asset folders. All these properties are already set in the `.csproj`, so a plain `dotnet publish -c Release -r win-x64` produces the same result.
+Output: `src\bin\Release\net8.0-windows10.0.19041.0\win-x64\publish\NetworkUsageMonitor.exe` — one file, no external DLLs or assets. All these properties are already set in the `.csproj`, so a plain `dotnet publish -c Release` gives the same result.
 
 ---
 
 ## 🔌 Dashboard API
 
-The dashboard is served by an `HttpListener` bound to `127.0.0.1` only (not reachable from other machines).
+Served by `HttpListener` on `127.0.0.1` only (default port `58765`, configurable via `DashboardPort`). Most endpoints accept `range`, `from`/`to`, `adapter`, `session=true`, and `country`.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `/api/apps` | Per-application totals for the selected range (supports country filter) |
-| `/api/timeline` | Time series for the main chart (zero-filled on the client) |
+| `/api/apps` | Per-application totals (with icons) |
+| `/api/timeline` | Time series for the main chart (auto bucket size, zero-filled) |
 | `/api/heatmap` | Weekly 7×24 activity matrix |
-| `/api/months` | List of months that have data in the DB |
-| `/api/compare` | Comparison of two selected months |
-| `/api/connections` | Live connections of a process (remote IP/port, protocol, country) |
+| `/api/adapters` | Known network adapters |
+| `/api/countries` | Traffic by country (optionally for one process) |
+| `/api/months` | Months that have data |
+| `/api/compare` | Two months (`monthA`, `monthB`): KPIs, deltas, top 10 apps |
+| `/api/app-details` | One application: totals, peak day, timeline, top countries |
+| `/api/connections` | Live connections of an app group (IPv4 TCP/UDP) |
+| `/api/reveal` (POST) | Open the exe in Explorer (`/select,`, safe argument passing) |
+| `/api/export` | Raw history as JSON or CSV |
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-App.xaml.cs               composition root: wires everything together, owns the app lifecycle
-Tray/NativeTrayIcon.cs    Win32 Shell_NotifyIcon tray icon (no WinForms dependency)
-UI/                       WPF flyout window (MainFlyout) + view models (MVVM, no external library)
+App.xaml.cs                  composition root, lifecycle, tray menu, error log
+Tray/NativeTrayIcon.cs       Win32 Shell_NotifyIcon tray icon (no WinForms)
+UI/                          WPF flyout (MainFlyout), view models (MVVM), ProcessIconCache
+Models/                      shared data types
 Monitoring/
-  EtwNetworkMonitor.cs        ETW consumer -> per-PID byte events (+ remote IP for GeoIP)
-  GeoIpResolver.cs            offline IPv4 -> country code, binary search over in-memory ranges
-  NetworkInterfaceClassifier  home/office vs. mobile hotspot vs. other
-  ProcessInfoResolver         PID -> friendly name / metadata, with caching
-  ProcessIconCache            process icons with colored-initials fallback
-  UsageAggregator             raw byte events -> 1s live speeds + 15s DB batches
-  NativeNetworkTables.cs      GetExtendedTcpTable/UdpTable for the live "connections" drill-down
-Persistence/SqliteUsageRepository.cs   schema, migrations, rollup, VACUUM, aggregate queries
-Notifications/DataCapNotifier.cs       80%/100% toast alerts for the mobile hotspot cap
+  EtwNetworkMonitor.cs       ETW consumer -> per-PID byte events (+ local/remote IPs)
+  NetworkAdapterResolver.cs  local IP -> adapter name ("Wi-Fi", "Ethernet", "Cellular", …)
+  GeoIpResolver.cs           offline IPv4 -> country, binary search over in-memory ranges
+  ProcessInfoResolver.cs     PID -> display name / path, cached
+  ProcessIconExtractor.cs    exe icons as PNG data URLs for the dashboard
+  UsageAggregator.cs         raw events -> 1 s live speeds + 15 s DB batches
+  NativeNetworkTables.cs     GetExtendedTcpTable/UdpTable for live connections
+Persistence/SqliteUsageRepository.cs   schema, migrations, rollup, VACUUM, queries
 Dashboard/
-  DashboardServer.cs      HttpListener on 127.0.0.1, serves the embedded UI + JSON API
-  wwwroot/                dashboard HTML/CSS/JS, embedded into the exe as resources
-Settings/                 JSON settings under %AppData%\NetworkUsageMonitor
+  DashboardServer.cs         HttpListener on 127.0.0.1: embedded UI + JSON API
+  wwwroot/                   HTML/CSS/JS embedded into the exe
+Settings/                    settings.json under %AppData%\NetworkUsageMonitor
 ```
 
 ## ⚙️ How it works
 
 ### Per-process bandwidth
 
-`GetExtendedTcpTable`/`GetExtendedUdpTable` only expose *which* process owns a connection, not how many bytes it has moved. To get real byte counts with low overhead, the app consumes the **Microsoft-Windows-Kernel-Network** ETW provider through `Microsoft.Diagnostics.Tracing.TraceEvent` (`EtwNetworkMonitor.cs`). It opens a kernel trace session with `KernelTraceEventParser.Keywords.NetworkTCPIP` and subscribes to `TcpIpSend`/`TcpIpRecv`/`TcpIpSendIPV6`/`TcpIpRecvIPV6`/`UdpIpSend`/`UdpIpRecv` events, each carrying the owning PID, transfer size and the remote address.
+`GetExtendedTcpTable`/`GetExtendedUdpTable` only say *who owns* a connection, not how many bytes it moved. So the app opens a kernel ETW session (`KernelTraceEventParser.Keywords.NetworkTCPIP`, via `Microsoft.Diagnostics.Tracing.TraceEvent`) and subscribes to TCP/UDP send/receive events (IPv4 and IPv6), each carrying the PID, size and both endpoints.
 
 <a id="why-administrator"></a>
-**Why Administrator?** Kernel ETW sessions are only available to elevated processes. `App.xaml.cs` checks this on startup and shows a message instead of silently failing; `app.manifest` also requests `requireAdministrator` so Windows elevates automatically.
+**Why Administrator?** Kernel ETW sessions require elevation. `App.xaml.cs` checks this at startup and shows a message instead of failing silently; `app.manifest` requests `requireAdministrator`.
 
-`UsageAggregator` fans each raw event into two independent counters: one reset every second for the live tray speed, and one reset every 15 seconds and flushed to SQLite in a single transaction — low disk and CPU usage with 1-second UI responsiveness.
+`UsageAggregator` feeds each event into two independent counters: one flushed every **1 s** for live tray speeds, one flushed every **15 s** to SQLite in a single batch.
+
+### Network adapter attribution
+
+ETW network events carry no adapter index, so `NetworkAdapterResolver` matches the connection's **local** address (source on send, destination on receive) against the unicast addresses of all active adapters. The map is rebuilt on `NetworkAddressChanged` and every 30 s as a safety net. Wi-Fi and Ethernet get friendly names, cellular adapters become "Cellular", anything else uses the adapter's own name; unmatched traffic is `Unknown`, loopback is `Loopback`.
 
 ### Offline GeoIP
 
-`GeoIpResolver` loads `geoip-ipv4.csv` into sorted, aligned arrays of range starts/ends/country codes. A lookup is a single `Array.BinarySearch` on the range start followed by a bounds check — no allocations, so it is safe to call directly from the ETW event handler. The database is downloaded and refreshed on a background thread; the new file replaces the old one only after it passes validation. Private, loopback and multicast addresses are short-circuited to `local`.
+`GeoIpResolver` loads `geoip-ipv4.csv` (DB-IP country data from [sapics/ip-location-db](https://github.com/sapics/ip-location-db)) into sorted arrays; a lookup is one binary search plus a bounds check. If the file is missing or invalid, it is downloaded in the background (retries after 0 s / 30 s / 2 min / 10 min), validated, and only then moved into place. An existing valid file is **not** re-downloaded automatically — delete it to force an update.
 
-### Network interface detection
+### Embedded dashboard
 
-`NetworkInterfaceClassifier.cs` uses the WinRT connectivity APIs (`Windows.Networking.Connectivity.NetworkInformation`), available from the `net8.0-windows10.0.19041.0` target framework:
-
-- A profile with `IsWwanConnectionProfile == true`, or an adapter with `IanaInterfaceType == 243` (cellular), is classified as **Mobile Hotspot** automatically (USB/Bluetooth tethering, cellular modems).
-- Wi-Fi is read via `ConnectionProfile.WlanConnectionProfileDetails.GetConnectedSsid()`. Windows does not reliably flag "this Wi-Fi is a phone hotspot", so Wi-Fi tethering is classified as Mobile Hotspot only when its SSID is in the user-maintained allow-list (`Known hotspot SSIDs` in `settings.json`). If Windows reports the network as metered but the SSID isn't listed, the UI suggests adding it.
-- Ethernet and everything else fall back to Home/Office or Other.
-
-### Embedded dashboard assets
-
-Everything under `Dashboard/wwwroot/` is marked `<EmbeddedResource Include="Dashboard\wwwroot\**\*" />`, so `dotnet publish` bakes it into the single `.exe`. `DashboardServer.cs` serves it from `Assembly.GetManifestResourceStream(...)` — no disk I/O and no external dependencies at runtime.
-
-Charts (timeline, heatmap, world map) are small, dependency-free `<canvas>` renderers in `dashboard.js`, keeping the "100% offline, single exe" promise with zero vendor files. Country flags are the only external resource (`flagcdn.com` images); everything else works without internet.
+Everything under `Dashboard/wwwroot/` is embedded into the exe and served from `GetManifestResourceStream`. Charts are plain `<canvas>` code, so the dashboard works offline; the only external resource is country flag images from `flagcdn.com` (they are simply hidden if unavailable).
 
 ### Data model
 
-History is stored per **display name** (e.g. "Google Chrome"), not per PID — PIDs are recycled and meaningless across time, so multiple `chrome.exe` instances become one row. Country traffic is stored in `country_samples` by adapter, session and process. Old detailed rows are rolled up into hourly buckets (see [Database maintenance](#️-database-sqlite-optimization--maintenance)). The live PID breakdown comes from the in-memory sample stream, not from SQLite.
+History is stored per **display name** (e.g. "Google Chrome"), not per PID, since PIDs are recycled. Country traffic goes to `country_samples` by adapter, session and process. The live PID breakdown comes from the in-memory stream, not SQLite.
 
 ---
 
 ## 💾 Data storage
 
-- `%AppData%\NetworkUsageMonitor\settings.json` — caps, SSID allow-list, category overrides
-- `%AppData%\NetworkUsageMonitor\usage.db` — SQLite (WAL mode), indexed on timestamp, process name, and (interface, timestamp)
-- `geoip-ipv4.csv` — offline country database (downloaded automatically in the background)
+Everything lives in `%AppData%\NetworkUsageMonitor\`:
+
+- `settings.json` — `DarkTheme`, `DashboardPort`
+- `usage.db` — SQLite (WAL), indexed by timestamp, process, adapter and session
+- `geoip-ipv4.csv` — offline country database
+- `error.log` — unhandled errors
 
 ---
 
-## 🧩 Intentionally simplified (and how to extend it)
+## 🧩 Limitations
 
-- **Connection hostnames**: `/api/connections` returns raw remote IP/port pairs plus the country. Hostname labels would need reverse DNS (`Dns.GetHostEntryAsync`, cached) or an ASN database (e.g. MaxMind GeoLite2-ASN); neither is wired in.
-- **IPv6 in the connection table**: `NativeNetworkTables.cs` covers IPv4 TCP/UDP only. Add the `AF_INET6` (`23`) variants and the `MIB_TCP6ROW_OWNER_PID` / `MIB_UDP6ROW_OWNER_PID` structs the same way if you need IPv6.
-- **GeoIP is IPv4-only** (IPv4-mapped IPv6 is supported); native IPv6 addresses are not resolved to countries.
-- **Settings UI**: there is no dedicated settings window yet — the tray menu's "Open settings file" opens `settings.json` directly. A small WPF dialog bound to `AppSettings` would be a natural next step.
-
----
+- **GeoIP is IPv4-only** (IPv4-mapped IPv6 works); native IPv6 addresses are counted as `unk`.
+- **Live connections** cover IPv4 TCP/UDP only (`NativeNetworkTables.cs`); IPv6 would need the `AF_INET6` table variants.
+- **No hostnames** in connections — only IP/port and country.
+- **No settings window**: use *Open settings file* in the tray menu.
 
 ## 🩺 Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| "Administrator rights required" message | Run the exe as Administrator, or use the [Task Scheduler autostart](#-run-automatically-at-windows-startup-task-scheduler). |
-| Countries are empty / all `local` | Wait for the background download of `geoip-ipv4.csv` to finish (needs internet once). |
-| No data after waking from sleep | The ETW session restarts automatically on resume; if it doesn't, restart the app. |
-| Database file is large | Rollup and `VACUUM` run automatically every 6 hours; space is reclaimed when more than 5000 rows are compacted. |
-| Dashboard doesn't open | Open it from the tray menu; make sure the app is running (check the tray). |
+| "Administrator privileges required" | Run as Administrator or use the [autostart task](#-autostart-task-scheduler). |
+| Countries empty / `unk` | The GeoIP file is still downloading (internet needed once) — or delete a corrupt `geoip-ipv4.csv`. |
+| No data after sleep | The ETW session restarts ~2.5 s after resume; if not, restart the app. |
+| Large database | Rollup and `VACUUM` run every 6 hours. |
+| Dashboard won't open | Use the tray menu; if the port is busy, change `DashboardPort` in `settings.json`. |
+| App says it's already running | Only one instance is allowed — check the tray (click `^`). |
 
 ---
 
-## 🤝 Contributing
+## 🙏 Acknowledgements
 
-Issues and pull requests are welcome. For larger changes please open an issue first to discuss what you'd like to change.
+- [Claude](https://claude.ai/) — AI assistance in generating the core architecture
+- [Gemini](https://gemini.google.com/) — AI assistance in debugging, refactoring, and feature expansion
+
+## 📧 Contact
+
+GitHub: [@BlackPencil-69](https://github.com/BlackPencil-69/)  
+Telegram: [@MrKap1toshka](https://t.me/MrKap1toshka)  
+Discord: [@anonym_pro](https://discord.com/users/1149264703470698529)
