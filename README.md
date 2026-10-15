@@ -102,7 +102,7 @@ A lightweight, self-contained Windows tray utility (C#, .NET 8, WPF) that shows 
 
 ## 🚀 Quick Start
 
-1. Download `NetworkUsageMonitor.exe` from [Releases](https://github.com/BlackPencil-69/NetworkUsageMonitor/releases) into a permanent folder, e.g. `C:\Tools\NetworkUsageMonitor\`.
+1. Download `NetworkUsageMonitor.exe` from [Releases] (https://github.com/BlackPencil-69/Network-Usage-Monitor/releases) into a permanent folder, e.g. `C:\Tools\NetworkUsageMonitor\`.
 2. Run it and confirm the UAC prompt.
 3. Click the tray icon for the flyout; right-click it → **Statistics** for the dashboard (`http://127.0.0.1:58765/` by default).
 
