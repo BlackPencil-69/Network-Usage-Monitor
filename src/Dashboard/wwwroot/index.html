@@ -25,12 +25,21 @@
 
     <section class="toolbar">
         <div class="segmented" id="rangeSwitch">
-            <button data-value="day" class="active">Day</button>
-            <button data-value="week">Week</button>
-            <button data-value="month">Month</button>
+            <button data-value="day" class="active">24 Hours</button>
+            <button data-value="today">Today</button>
+            <button data-value="week">7 Days</button>
+            <button data-value="this_week">This Week</button>
+            <button data-value="30d">30 Days</button>
+            <button data-value="calendar_month">This Month</button>
             <button data-value="year">Year</button>
+            <button data-value="this_year">This Year</button>
             <button data-value="all">All-time</button>
         </div>
+
+        <select id="monthPicker" class="select-input" title="View a specific month">
+            <option value="">Select month…</option>
+        </select>
+        <button class="btn" id="compareMonthsBtn">Compare Months</button>
 
         <div class="segmented" id="adapterSwitch">
             <button data-value="all" class="active">All Networks</button>
@@ -41,6 +50,11 @@
             <span>Current session only</span>
         </label>
 
+        <div id="activeCountryFilter" class="country-filter-badge" style="display:none;">
+            <span id="activeCountryLabel"></span>
+            <button id="clearCountryFilter" title="Clear country filter">&times;</button>
+        </div>
+
         <div class="spacer"></div>
 
         <div class="export-menu">
@@ -49,12 +63,53 @@
         </div>
     </section>
 
+    <section class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-label">Total Traffic</div>
+            <div class="kpi-value" id="kpiTotal">0 B</div>
+            <div class="kpi-sub" id="kpiSplit">↓ 0 B / ↑ 0 B</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Daily Average</div>
+            <div class="kpi-value" id="kpiDailyAvg">0 B</div>
+            <div class="kpi-sub">per active day</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Peak Activity</div>
+            <div class="kpi-value" id="kpiPeak">0 B</div>
+            <div class="kpi-sub" id="kpiPeakSub">—</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Top Country / Active Apps</div>
+            <div class="kpi-value" id="kpiAppsCount">0</div>
+            <div class="kpi-sub" id="kpiTopCountry">—</div>
+        </div>
+    </section>
+
+    <section class="card compare-card" id="compareSection" style="display:none;">
+        <div class="card-header">
+            <h2>Compare months</h2>
+            <button class="icon-btn" id="compareClose" title="Close comparison">&times;</button>
+        </div>
+        <div class="compare-controls">
+            <select id="compareMonthA" class="select-input"></select>
+            <span class="compare-vs">vs</span>
+            <select id="compareMonthB" class="select-input"></select>
+        </div>
+        <!-- Рендериться JS: .compare-summary (Total / Download / Upload з .delta-badge.up|down|flat)
+             та таблиця .compare-table для топ-програм -->
+        <div id="compareResults"></div>
+    </section>
+
     <main class="grid">
 
         <section class="card timeline-card">
             <div class="card-header">
                 <h2>Traffic over time</h2>
-                <button class="btn ghost" id="resetZoom">Reset zoom</button>
+                <div class="card-header-actions">
+                    <span class="zoom-hint">Scroll to zoom • Double-click to reset</span>
+                    <button class="btn ghost" id="resetZoom">Reset zoom</button>
+                </div>
             </div>
             <div class="chart-controls">
                 <div class="segmented" id="chartModeSwitch">
@@ -68,7 +123,10 @@
                     <span class="legend-item"><span class="legend-swatch legend-upload"></span>Upload</span>
                 </div>
             </div>
-            <canvas id="timelineCanvas"></canvas>
+            <div class="canvas-wrap" style="position:relative;">
+                <canvas id="timelineCanvas"></canvas>
+                <div id="chartTooltip" class="chart-tooltip"></div>
+            </div>
         </section>
 
         <section class="card apps-card">
@@ -80,8 +138,11 @@
                     <button data-value="sent">Upload</button>
                     <button data-value="name">Name</button>
                 </div>
-                <!-- Кнопка тепер лежить ПОРУЧ із div, а не всередині нього -->
                 <button id="sort-order-btn" class="order-btn" title="Toggle Sort Order">↓</button>
+            </div>
+            <div class="apps-summary" id="appsSummary">
+                <span class="apps-summary-label" id="appsSummaryLabel">Total Traffic</span>
+                <span class="apps-summary-value" id="appsSummaryValue">0 B</span>
             </div>
             <div id="appList" class="app-list"></div>
         </section>
@@ -91,6 +152,20 @@
                 <h2>Weekly activity heatmap</h2>
             </div>
             <canvas id="heatmapCanvas"></canvas>
+        </section>
+
+        <section class="card countries-card">
+            <div class="card-header">
+                <h2>Traffic by Country</h2>
+                <div class="segmented" id="countryViewSwitch">
+                    <button data-value="list" class="active">Top List</button>
+                    <button data-value="map">World Map</button>
+                </div>
+            </div>
+            <div class="countries-hint">Click a country to filter dashboard</div>
+            <div id="countryMapWrap" class="country-map-wrap" style="display:none;"></div>
+            <!-- Рядок країни (JS): .country-row > .flag-icon + .country-name + .country-bar>.country-bar-fill + .country-usage>(.country-bytes, .country-conns) -->
+            <div id="countryList" class="country-list"></div>
         </section>
 
     </main>
@@ -106,6 +181,26 @@
             <button class="icon-btn" id="modalClose">&times;</button>
         </div>
         <div class="modal-body">
+            <div class="modal-stats">
+                <div class="modal-metric">
+                    <div class="modal-metric-label">Total traffic</div>
+                    <div class="modal-metric-value" id="modalAppTotal">0 B</div>
+                </div>
+                <div class="modal-metric">
+                    <div class="modal-metric-label">Share of all traffic</div>
+                    <div class="modal-metric-value" id="modalAppShare">0%</div>
+                </div>
+                <div class="modal-metric">
+                    <div class="modal-metric-label">Peak</div>
+                    <div class="modal-metric-value" id="modalAppPeak">—</div>
+                </div>
+            </div>
+
+            <canvas id="modalAppCanvas" height="130"></canvas>
+
+            <h4>Top countries</h4>
+            <div id="modalAppCountries" class="modal-countries"></div>
+
             <h4>Live connections</h4>
             <table class="conn-table">
                 <thead>

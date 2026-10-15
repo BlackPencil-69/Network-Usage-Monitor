@@ -15,9 +15,26 @@ public sealed class FlyoutViewModel : ObservableObject, IDisposable
     private readonly DashboardServer _dashboardServer;
     private readonly Dictionary<string, AppGroupViewModel> _groupsByKey = new();
 
+    private long _totalReceivedPerSecond;
+    private long _totalSentPerSecond;
+
     public ObservableCollection<AppGroupViewModel> Groups { get; } = new();
 
     public ICommand OpenStatisticsCommand { get; }
+
+    /// <summary>Total download speed across all active processes, bytes per second.</summary>
+    public long TotalReceivedPerSecond
+    {
+        get => _totalReceivedPerSecond;
+        private set => SetField(ref _totalReceivedPerSecond, value);
+    }
+
+    /// <summary>Total upload speed across all active processes, bytes per second.</summary>
+    public long TotalSentPerSecond
+    {
+        get => _totalSentPerSecond;
+        private set => SetField(ref _totalSentPerSecond, value);
+    }
 
     public FlyoutViewModel(UsageAggregator aggregator, DashboardServer dashboardServer)
     {
@@ -31,11 +48,23 @@ public sealed class FlyoutViewModel : ObservableObject, IDisposable
 
     private void OnLiveSample(IReadOnlyList<LiveProcessSpeed> speeds)
     {
-        Application.Current?.Dispatcher.Invoke(() => Update(speeds));
+        Application.Current?.Dispatcher.BeginInvoke(() => Update(speeds));
     }
 
     private void Update(IReadOnlyList<LiveProcessSpeed> speeds)
     {
+        // Totals come straight from the incoming sample; an empty sample resets them to 0.
+        long totalReceived = 0;
+        long totalSent = 0;
+        foreach (var speed in speeds)
+        {
+            totalReceived += speed.BytesReceivedPerSecond;
+            totalSent += speed.BytesSentPerSecond;
+        }
+
+        TotalReceivedPerSecond = totalReceived;
+        TotalSentPerSecond = totalSent;
+
         var byGroup = speeds.GroupBy(s => s.Process.GroupKey).ToList();
         var seenKeys = new HashSet<string>();
 

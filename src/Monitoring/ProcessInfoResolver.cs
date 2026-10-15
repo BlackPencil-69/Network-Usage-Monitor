@@ -13,22 +13,27 @@ public sealed class ProcessInfoResolver
 
     public ResolvedProcessInfo Resolve(int pid)
     {
-        _lastSeen[pid] = DateTimeOffset.UtcNow;
-
         if (_cache.TryGetValue(pid, out var cached))
         {
+            _lastSeen[pid] = DateTimeOffset.UtcNow;
             return cached;
         }
 
-        var info = ResolveUncached(pid);
-        _cache[pid] = info;
+        var info = ResolveUncached(pid, out bool shouldCache);
+        if (shouldCache)
+        {
+            _cache[pid] = info;
+            _lastSeen[pid] = DateTimeOffset.UtcNow;
+        }
+
         return info;
     }
 
-    private static ResolvedProcessInfo ResolveUncached(int pid)
+    private static ResolvedProcessInfo ResolveUncached(int pid, out bool shouldCache)
     {
         string processName = "Unknown";
         string? path = null;
+        shouldCache = true;
 
         try
         {
@@ -47,7 +52,18 @@ public sealed class ProcessInfoResolver
         }
         catch
         {
-            processName = pid == 4 ? "System" : $"pid-{pid}";
+            if (pid == 4)
+            {
+                processName = "System";
+                shouldCache = true;
+            }
+            else
+            {
+                processName = "Background / Short-lived";
+                // Не кешуємо невпізнані мертві процеси, щоб при повторному
+                // використанні PID системою Windows новий процес визначився коректно.
+                shouldCache = false;
+            }
         }
 
         var displayName = TryGetFriendlyName(path) ?? HumanizeProcessName(processName);

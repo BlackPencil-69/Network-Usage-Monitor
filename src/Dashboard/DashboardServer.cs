@@ -1,5 +1,7 @@
 using System.IO;
+using System.Collections.Specialized;
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -13,6 +15,14 @@ namespace NetworkUsageMonitor.Dashboard;
 
 public sealed class DashboardServer : IDisposable
 {
+    /// <summary>Некоректний параметр запиту - перетворюється на HTTP 400.</summary>
+    private sealed class RequestValidationException : Exception
+    {
+        public RequestValidationException(string message) : base(message) { }
+    }
+
+    private const int AllAppsLimit = 100_000;
+
     private readonly HttpListener _listener = new();
     private readonly SqliteUsageRepository _repository;
     private readonly UsageAggregator _aggregator;
@@ -94,6 +104,11 @@ public sealed class DashboardServer : IDisposable
             }
             catch (Exception)
             {
+                if (token.IsCancellationRequested || !_listener.IsListening)
+                {
+                    return;
+                }
+
                 continue;
             }
 
@@ -106,6 +121,18 @@ public sealed class DashboardServer : IDisposable
         try
         {
             await Route(context);
+        }
+        catch (RequestValidationException ex)
+        {
+            try
+            {
+                context.Response.StatusCode = 400;
+                await WriteText(context.Response, ex.Message);
+            }
+            catch
+            {
+                // Client likely disconnected; nothing more we can do.
+            }
         }
         catch (Exception ex)
         {
@@ -149,6 +176,18 @@ public sealed class DashboardServer : IDisposable
             case "/api/adapters":
                 await WriteJson(context.Response, _repository.GetKnownAdapters());
                 return;
+            case "/api/countries":
+                await HandleCountries(context.Response, query);
+                return;
+            case "/api/months":
+                await WriteJson(context.Response, _repository.GetAvailableMonths());
+                return;
+            case "/api/compare":
+                await HandleCompare(context.Response, query);
+                return;
+            case "/api/app-details":
+                await HandleAppDetails(context.Response, query);
+                return;
             case "/api/connections":
                 await HandleConnections(context.Response, query);
                 return;
@@ -165,54 +204,124 @@ public sealed class DashboardServer : IDisposable
         }
     }
 
-    private static (DateTimeOffset From, DateTimeOffset To, string? Session, string? Adapter) ParseRange(
-        System.Collections.Specialized.NameValueCollection query)
+    private static string? NormalizeFilter(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return value.Trim();
+    }
+
+    /// <summary>Північ за локальним часом для заданої дати, переведена в UTC (DST враховується для самої дати).</summary>
+    private static DateTimeOffset LocalMidnightUtc(int year, int month, int day) =>
+        new DateTimeOffset(new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Local)).ToUniversalTime();
+
+    /// <summary>
+    /// "YYYY-MM" -> [1-ше число 00:00:00; останній день 23:59:59] за локальним часом, у UTC.
+    /// </summary>
+    private static bool TryGetMonthRange(string? month, out DateTimeOffset from, out DateTimeOffset to)
+    {
+        from = default;
+        to = default;
+
+        if (string.IsNullOrWhiteSpace(month) ||
+            !DateTime.TryParseExact(month.Trim(), "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            return false;
+        }
+
+        try
+        {
+            var firstLocal = new DateTime(parsed.Year, parsed.Month, 1, 0, 0, 0, DateTimeKind.Local);
+            var nextFirstLocal = firstLocal.AddMonths(1);
+            from = new DateTimeOffset(firstLocal).ToUniversalTime();
+            to = new DateTimeOffset(nextFirstLocal.AddSeconds(-1)).ToUniversalTime();
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+    }
+
+    private (DateTimeOffset From, DateTimeOffset To, string? Session, string? Adapter, string? Country) ParseRange(
+        NameValueCollection query)
     {
         var range = query["range"] ?? "day";
         var now = DateTimeOffset.UtcNow;
+        var localNow = DateTimeOffset.Now;
         DateTimeOffset from;
+        DateTimeOffset to = now;
 
+        switch (range)
+        {
+            case "today":
+                // "That Day": поточна календарна доба з 00:00 за локальним часом.
+                from = LocalMidnightUtc(localNow.Year, localNow.Month, localNow.Day);
+                break;
+            case "week":
+                from = now.AddDays(-7);
+                break;
+            case "this_week":
+            {
+                // "That Week": з понеділка 00:00 (локально). DayOfWeek: Sunday=0 -> зсув (d + 6) % 7 від понеділка.
+                var monday = localNow.Date.AddDays(-(((int)localNow.DayOfWeek + 6) % 7));
+                from = LocalMidnightUtc(monday.Year, monday.Month, monday.Day);
+                break;
+            }
+            case "30d":
+            case "month":
+                from = now.AddDays(-30);
+                break;
+            case "calendar_month":
+                // "This Month": з 1-го числа поточного місяця 00:00 (локально).
+                from = LocalMidnightUtc(localNow.Year, localNow.Month, 1);
+                break;
+            case "year":
+                from = now.AddDays(-365);
+                break;
+            case "this_year":
+                // "That Year": з 1 січня поточного року 00:00 (локально).
+                from = LocalMidnightUtc(localNow.Year, 1, 1);
+                break;
+            case "custom_month":
+                if (!TryGetMonthRange(query["month"], out from, out to))
+                {
+                    throw new RequestValidationException("Parameter 'month' must be in YYYY-MM format (e.g. 2026-09).");
+                }
+                break;
+            case "all":
+                from = DateTimeOffset.UnixEpoch;
+                break;
+            default: // "day" - останні 24 години
+                from = now.AddHours(-24);
+                break;
+        }
+
+        // Явні from/to мають пріоритет над будь-яким range.
         if (query["from"] is { Length: > 0 } fromStr && DateTimeOffset.TryParse(fromStr, out var parsedFrom))
         {
             from = parsedFrom;
         }
-        else
+
+        if (query["to"] is { Length: > 0 } toStr && DateTimeOffset.TryParse(toStr, out var parsedTo))
         {
-            from = range switch
-            {
-                "week" => now.AddDays(-7),
-                "month" => now.AddMonths(-1),
-                "year" => now.AddYears(-1),
-                "all" => DateTimeOffset.UnixEpoch,
-                _ => now.AddDays(-1)
-            };
+            to = parsedTo;
         }
 
-        DateTimeOffset to = query["to"] is { Length: > 0 } toStr && DateTimeOffset.TryParse(toStr, out var parsedTo)
-            ? parsedTo
-            : now;
+        var session = query["session"] == "true" ? _aggregator.SessionId : null;
+        var adapter = NormalizeFilter(query["adapter"]);
+        var country = NormalizeFilter(query["country"]);
 
-        var session = query["session"] == "true" ? ComputeCurrentSessionId() : null;
-
-        var adapter = query["adapter"];
-        if (string.IsNullOrWhiteSpace(adapter) || string.Equals(adapter, "all", StringComparison.OrdinalIgnoreCase))
-        {
-            adapter = null;
-        }
-
-        return (from, to, session, adapter);
+        return (from, to, session, adapter, country);
     }
 
-    private static string ComputeCurrentSessionId()
+    private async Task HandleApps(HttpListenerResponse response, NameValueCollection query)
     {
-        var approximateBootTime = DateTime.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64);
-        return approximateBootTime.ToString("yyyyMMddHHmm");
-    }
-
-    private async Task HandleApps(HttpListenerResponse response, System.Collections.Specialized.NameValueCollection query)
-    {
-        var (from, to, session, adapter) = ParseRange(query);
-        var totals = _repository.GetAppTotals(from, to, session, adapter);
+        var (from, to, session, adapter, country) = ParseRange(query);
+        var totals = _repository.GetAppTotals(from, to, session, adapter, countryCode: country);
 
         var payload = totals.Select(t => new
         {
@@ -227,35 +336,248 @@ public sealed class DashboardServer : IDisposable
         await WriteJson(response, payload);
     }
 
-    private async Task HandleTimeline(HttpListenerResponse response, System.Collections.Specialized.NameValueCollection query)
-    {
-        var (from, to, session, adapter) = ParseRange(query);
-        var bucketSeconds = query["granularity"] switch
+    /// <summary>Розмір бакета: явний granularity має пріоритет, інакше підбираємо за довжиною діапазону.</summary>
+    private static int PickBucketSeconds(NameValueCollection query, TimeSpan span) =>
+        query["granularity"] switch
         {
             "hour" => 3600,
             "day" => 86400,
-            _ => 300
+            _ when span <= TimeSpan.FromDays(2) => 300,     // day, today: 5 хв
+            _ when span <= TimeSpan.FromDays(14) => 1800,   // week, this_week: 30 хв
+            _ when span <= TimeSpan.FromDays(62) => 3600,   // 30d, calendar_month, custom_month: 1 год
+            _ => 86400                                      // year, this_year, all: 1 доба
         };
 
-        var points = _repository.GetTimeline(from, to, bucketSeconds, session, adapter);
-        var payload = points.Select(p => new
+    /// <summary>
+    /// Zero-filling: суцільна сітка часових точок, порожні кроки = 0 байт.
+    /// Правий край обрізається поточним моментом, щоб не малювати «майбутні» нулі
+    /// (наприклад, для custom_month поточного місяця). Без даних повертає порожній список.
+    /// </summary>
+    private static List<object> BuildZeroFilledTimeline(
+        IReadOnlyList<TimelinePoint> points, DateTimeOffset from, DateTimeOffset to, int bucketSeconds)
+    {
+        // Індексуємо наявні бакети за вирівняним unix-часом (суму додаємо на випадок дублікатів).
+        var buckets = new Dictionary<long, (long Sent, long Received)>();
+        foreach (var p in points)
         {
-            timestamp = p.BucketStart.ToUnixTimeSeconds(),
-            bytesSent = p.BytesSent,
-            bytesReceived = p.BytesReceived
-        });
+            var key = p.BucketStart.ToUnixTimeSeconds() / bucketSeconds * bucketSeconds;
+            buckets.TryGetValue(key, out var current);
+            buckets[key] = (current.Sent + p.BytesSent, current.Received + p.BytesReceived);
+        }
 
-        await WriteJson(response, payload);
+        var result = new List<object>();
+        if (buckets.Count == 0)
+        {
+            return result;
+        }
+
+        var nowUtc = DateTimeOffset.UtcNow;
+        var effectiveTo = to > nowUtc ? nowUtc : to;
+
+        // Для "all" (from = 1970) стартуємо з першого реального бакета, а не з епохи Unix.
+        var effectiveFromUnix = from <= DateTimeOffset.UnixEpoch
+            ? buckets.Keys.Min()
+            : from.ToUnixTimeSeconds();
+
+        var startBucket = effectiveFromUnix / bucketSeconds * bucketSeconds;
+        var endBucket = effectiveTo.ToUnixTimeSeconds() / bucketSeconds * bucketSeconds;
+
+        for (var t = startBucket; t <= endBucket; t += bucketSeconds)
+        {
+            buckets.TryGetValue(t, out var b);
+            result.Add(new
+            {
+                timestamp = t,
+                bytesSent = b.Sent,
+                bytesReceived = b.Received
+            });
+        }
+
+        return result;
     }
 
-    private async Task HandleHeatmap(HttpListenerResponse response, System.Collections.Specialized.NameValueCollection query)
+    private async Task HandleTimeline(HttpListenerResponse response, NameValueCollection query)
     {
-        var (from, to, _, adapter) = ParseRange(query);
-        var cells = _repository.GetHeatmap(from, to, adapter);
+        var (from, to, session, adapter, country) = ParseRange(query);
+        var bucketSeconds = PickBucketSeconds(query, to - from);
+
+        var points = _repository.GetTimeline(from, to, bucketSeconds, session, adapter, country);
+
+        // Даних немає взагалі - віддаємо порожній масив, щоб UI показав "No data for this range yet".
+        await WriteJson(response, BuildZeroFilledTimeline(points, from, to, bucketSeconds));
+    }
+
+    private async Task HandleHeatmap(HttpListenerResponse response, NameValueCollection query)
+    {
+        var (from, to, _, adapter, country) = ParseRange(query);
+        var cells = _repository.GetHeatmap(from, to, adapter, country);
         await WriteJson(response, cells.Select(c => new { dayOfWeek = c.DayOfWeek, hour = c.Hour, totalBytes = c.TotalBytes }));
     }
 
-    private async Task HandleConnections(HttpListenerResponse response, System.Collections.Specialized.NameValueCollection query)
+    private static object ToCountryPayload(CountryStat c) => new
+    {
+        countryCode = c.CountryCode,
+        bytesSent = c.BytesSent,
+        bytesReceived = c.BytesReceived,
+        totalBytes = c.BytesSent + c.BytesReceived,
+        totalConnections = c.TotalConnections,
+        connectionCount = c.TotalConnections
+    };
+
+    private async Task HandleCountries(HttpListenerResponse response, NameValueCollection query)
+    {
+        // Фільтр country тут свідомо ігнорується: ендпоінт сам і є розбивкою за країнами.
+        var (from, to, session, adapter, _) = ParseRange(query);
+        var processName = NormalizeFilter(query["name"]);
+
+        int limit = int.TryParse(query["limit"], out var parsedLimit) ? Math.Clamp(parsedLimit, 1, 500) : 50;
+
+        var countries = _repository.GetCountryTotals(from, to, session, adapter, processName)
+            .Take(limit)
+            .Select(ToCountryPayload);
+
+        await WriteJson(response, countries);
+    }
+
+    /// <summary>Скільки календарних діб (локально) місяця вже минуло; для минулих місяців - усі, для майбутніх - 0.</summary>
+    private static int CountElapsedDays(DateTimeOffset fromUtc, DateTimeOffset toUtc)
+    {
+        var nowUtc = DateTimeOffset.UtcNow;
+        var effectiveTo = toUtc < nowUtc ? toUtc : nowUtc;
+        var days = (effectiveTo.ToLocalTime().Date - fromUtc.ToLocalTime().Date).Days + 1;
+        return Math.Max(0, days);
+    }
+
+    private static object BuildMonthSummary(
+        string month, DateTimeOffset from, DateTimeOffset to, IReadOnlyList<AppTotal> apps)
+    {
+        long upload = apps.Sum(a => a.BytesSent);
+        long download = apps.Sum(a => a.BytesReceived);
+        long total = upload + download;
+        int days = CountElapsedDays(from, to);
+
+        return new
+        {
+            month,
+            daysCounted = days,
+            downloadBytes = download,
+            uploadBytes = upload,
+            totalBytes = total,
+            avgDailyBytes = days > 0 ? total / days : 0L
+        };
+    }
+
+    private static double? PercentChange(long baseline, long current) =>
+        baseline > 0 ? Math.Round((current - baseline) * 100.0 / baseline, 1) : null;
+
+    private async Task HandleCompare(HttpListenerResponse response, NameValueCollection query)
+    {
+        var monthA = query["monthA"]?.Trim();
+        var monthB = query["monthB"]?.Trim();
+
+        if (!TryGetMonthRange(monthA, out var fromA, out var toA) ||
+            !TryGetMonthRange(monthB, out var fromB, out var toB))
+        {
+            response.StatusCode = 400;
+            await WriteText(response, "Parameters 'monthA' and 'monthB' must be in YYYY-MM format (e.g. 2026-09).");
+            return;
+        }
+
+        var adapter = NormalizeFilter(query["adapter"]);
+
+        var appsA = _repository.GetAppTotals(fromA, toA, null, adapter, AllAppsLimit);
+        var appsB = _repository.GetAppTotals(fromB, toB, null, adapter, AllAppsLimit);
+
+        var summaryA = BuildMonthSummary(monthA!, fromA, toA, appsA);
+        var summaryB = BuildMonthSummary(monthB!, fromB, toB, appsB);
+
+        long totalA = appsA.Sum(a => a.BytesSent + a.BytesReceived);
+        long totalB = appsB.Sum(a => a.BytesSent + a.BytesReceived);
+        long downloadA = appsA.Sum(a => a.BytesReceived), downloadB = appsB.Sum(a => a.BytesReceived);
+        long uploadA = appsA.Sum(a => a.BytesSent), uploadB = appsB.Sum(a => a.BytesSent);
+        int daysA = CountElapsedDays(fromA, toA), daysB = CountElapsedDays(fromB, toB);
+        long avgA = daysA > 0 ? totalA / daysA : 0, avgB = daysB > 0 ? totalB / daysB : 0;
+
+        // Об'єднуємо застосунки обох місяців; monthA - базовий період, monthB - порівнюваний.
+        var merged = new Dictionary<string, (long A, long B, string? Path)>(StringComparer.Ordinal);
+        foreach (var app in appsA)
+        {
+            merged[app.ProcessName] = (app.BytesSent + app.BytesReceived, 0L, app.ExecPath);
+        }
+
+        foreach (var app in appsB)
+        {
+            long bytes = app.BytesSent + app.BytesReceived;
+            merged[app.ProcessName] = merged.TryGetValue(app.ProcessName, out var cur)
+                ? (cur.A, bytes, cur.Path ?? app.ExecPath)
+                : (0L, bytes, app.ExecPath);
+        }
+
+        // Топ-10 за сумарним трафіком двох місяців, щоб потрапили і ті, хто «виріс», і ті, хто «зник».
+        var topApps = merged
+            .OrderByDescending(kv => kv.Value.A + kv.Value.B)
+            .Take(10)
+            .Select(kv => new
+            {
+                processName = kv.Key,
+                executablePath = kv.Value.Path,
+                iconDataUrl = ProcessIconExtractor.GetPngDataUrl(kv.Value.Path),
+                bytesA = kv.Value.A,
+                bytesB = kv.Value.B,
+                deltaBytes = kv.Value.B - kv.Value.A,
+                deltaPercent = PercentChange(kv.Value.A, kv.Value.B)
+            })
+            .ToList();
+
+        await WriteJson(response, new
+        {
+            adapter,
+            monthA = summaryA,
+            monthB = summaryB,
+            delta = new
+            {
+                downloadBytes = downloadB - downloadA,
+                uploadBytes = uploadB - uploadA,
+                totalBytes = totalB - totalA,
+                avgDailyBytes = avgB - avgA,
+                totalPercent = PercentChange(totalA, totalB)
+            },
+            topApps
+        });
+    }
+
+    private async Task HandleAppDetails(HttpListenerResponse response, NameValueCollection query)
+    {
+        var name = query["name"];
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            response.StatusCode = 400;
+            await WriteText(response, "Parameter 'name' is required.");
+            return;
+        }
+
+        // country тут не застосовується: топ країн цього застосунку рахується окремо.
+        var (from, to, _, adapter, _) = ParseRange(query);
+        var bucketSeconds = PickBucketSeconds(query, to - from);
+
+        var details = _repository.GetAppDetails(name, from, to, bucketSeconds, adapter);
+        var timeline = BuildZeroFilledTimeline(details.Timeline, from, to, bucketSeconds);
+
+        await WriteJson(response, new
+        {
+            processName = details.ProcessName,
+            totalBytesSent = details.Timeline.Sum(p => p.BytesSent),
+            totalBytesReceived = details.Timeline.Sum(p => p.BytesReceived),
+            totalBytes = details.Timeline.Sum(p => p.BytesSent + p.BytesReceived),
+            timeline,
+            peakDay = details.PeakDayBytes > 0
+                ? new { date = details.PeakDayDate, bytes = details.PeakDayBytes }
+                : null,
+            topCountries = details.TopCountries.Select(ToCountryPayload)
+        });
+    }
+
+    private async Task HandleConnections(HttpListenerResponse response, NameValueCollection query)
     {
         var group = query["group"];
         List<int> pids;
@@ -329,9 +651,9 @@ public sealed class DashboardServer : IDisposable
         await WriteJson(context.Response, new { ok = true });
     }
 
-    private async Task HandleExport(HttpListenerResponse response, System.Collections.Specialized.NameValueCollection query)
+    private async Task HandleExport(HttpListenerResponse response, NameValueCollection query)
     {
-        var (from, to, _, _) = ParseRange(query);
+        var (from, to, _, _, _) = ParseRange(query);
         var format = query["format"] ?? "json";
         var rows = _repository.ExportRaw(from, to).ToList();
 
