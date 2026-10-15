@@ -164,9 +164,11 @@ Replacing the exe **at the same path** keeps the task working; close the running
 
 ---
 
-## 🛠️ Build & publish
+## 🛠️ Or clone the repository, build & publish
 
 ```powershell
+git clone https://github.com/BlackPencil-69/Network-Usage-Monitor
+cd Network-Usage-Monitor
 cd src
 dotnet restore
 dotnet run          # run the terminal as Administrator (app.manifest requires elevation)
